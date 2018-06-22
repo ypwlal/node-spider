@@ -1,6 +1,7 @@
 const cheerio = require('cheerio');
 const SpiderPool = require('./pools/spiderPool');
 const TaskPool = require('./pools/taskPool');
+const redisSvc = require('./service/redis');
 
 const HOST_NAME = 'https://music.163.com';
 
@@ -12,11 +13,13 @@ function createTask(data) {
     });
 }
 
+const failTask = [];
+
 const tasks = [
     {
         name: 'start',
         page: '/discover/artist',
-        vistor: (html) => {
+        vistor: async (html) => {
             const time = +new Date();
             const list = [];
             console.log('parse begin.');
@@ -41,8 +44,17 @@ const tasks = [
                     });
                 }
             });
+            
+            for (const item of list) {
+                try {
+                    await redisSvc.sadd('taskSet', item.url);
+                    await redisSvc.hset('taskHash', item.url, item);
+                } catch (e) {
+                    console.log('redis error: ', e);
+                    failTask.push(item);
+                }
+            }
             console.log('parse over, cost ' + (Date.now() - time) + 'ms');
-            console.log(list[0]);
             return list;
         }
     },
@@ -75,8 +87,23 @@ const tasks = [
         vistor: (html) => {
             return {}
         }
+    },
+    {
+        name: 'artistUser',
+        page: (id) => `/user/home?id=${id}`,
+        vistor: (html) => {
+
+        }
     }
 ];
+
+const taskMap = {
+    'artist': 1,
+    'artist/album': 2,
+    'album': 3,
+    'song': 4,
+    'artistUser': 5
+};
 
 async function firstPhase() {
     console.log(`第1阶段: ${tasks[0].name}开始`);
@@ -93,21 +120,51 @@ async function firstPhase() {
     console.log(`第1阶段: ${task.name}结束, cost ` + (Date.now() - time) + 'ms');
 }
 
-async function begin() {
-    await firstPhase();
-    for (let i = 1; i < tasks.length; i += 1) {
+async function runner(spider) {
+    let loop = true;
+    let key = null;
+    while (loop) {
         const time = +new Date();
-        console.log(`第${i + 1}阶段: ${tasks[i].name}开始`);
-        const spide = new Spider();
-        spider.init({
-            url: HOST_NAME + tasks[i].page,
-            vistor: tasks[i].vistor
-        });
-        console.log(`第${i + 1}阶段: ${tasks[i].name}结束, cost ` + (Date.now() - time) + 'ms');
+        key = key || await redisSvc.spop('taskSet');
+        console.log(`task start ${key}`);
+        if (!key) {
+            return spider.release();
+        }
+        const task = await redisSvc.hget('taskHash', key);
+        const vistor = tasks[taskMap[task.taskType]];
+        if (vistor) {
+            spider.init({
+                url: HOST_NAME + task.url,
+                vistor
+            });
+            await spider.start();
+        }
+        console.log(`task end ${key}: cost ` + (Date.now() - time) + 'ms');
+        // key = await redisSvc.spop('taskSet');
+        loop = false; //!!key;
     }
+    return spider.release();
 }
 
-firstPhase().catch(err => {
-    console.log('firstPhase error: ' + err);
+async function begin() {
+    await firstPhase();
+    console.log('begin');
+    const time = +new Date();
+    const list = [];
+    let hasUseSpider = true;
+    while (hasUseSpider) {
+        const spider = SpiderPool.getSpider();
+        if (spider) {
+            list.push(runner(spider));
+        } else {
+            hasUseSpider = false;
+        }
+    }
+    await Promise.all(list)
+    console.log(`over: cost ` + (Date.now() - time) + 'ms');
+}
+
+begin().catch(err => {
+    console.log('begin error: ' + err);
     process.exit(1);
 })
