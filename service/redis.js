@@ -58,5 +58,9 @@ module.exports = {
 
     async spop(key) {
         return p_spop(key);
+    },
+
+    quit() {
+        return redis.quit();
     }
 };

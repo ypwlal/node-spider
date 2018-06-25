@@ -10,6 +10,7 @@ class SpiderPool {
     getSpider() {
         if (this.poolSize < this.size) {
             const spider = new Spider({
+                id: this.poolSize,
                 onRelease: () => this.pool.push(spider)
             });
             this.poolSize += 1;
@@ -19,4 +20,4 @@ class SpiderPool {
     }
 }
 
-module.exports = new SpiderPool(2);
+module.exports = new SpiderPool(3);

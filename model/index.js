@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
-mongoose.connect('mongodb://192.168.31.112:21708/foo');
+const { MONGODB } = require('../config');
+mongoose.connect(`mongodb://${MONGODB.HOST}:${MONGODB.PORT}/${MONGODB.DB}`);
 mongoose.Promise = Promise;
 
 mongoose.plugin(schema => {
@@ -19,5 +20,6 @@ mongoose.plugin(schema => {
 module.exports = {
     Artist: require('./artist'),
     Album: require('./album'),
-    Song: require('./song')
+    Song: require('./song'),
+    Category: require('./category')
 };

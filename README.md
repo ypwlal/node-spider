@@ -1,32 +1,46 @@
-所有歌手 /discover/artist/cat?id=xx&initial={0, 65, 90}
-A-Z 其他
-歌手页面 /artist?id=xx
-歌手 -> 所有专辑 /artist/album?id=xx
-    专辑 -> 歌曲 /album?id=yyy
-        comment
-        歌曲 /song?id=zz
-            comment
-
-* create task // flatten
+* create task base url // flatten
     - start
+    - category
     - artist
     - artist/album
     - album
     - song
 
-* split parse and process
-    - save task // hundreds of thousands for songs
-        - useless task
-    - process task
-    - speed different
+* task // the abstract of works. A task is used to create a new spider job and record the data in redis for writers or reader workers.
+    - taskType // spider job type
+    - url // as key
+    - data // something for making new tasks or writing into redis
 
-* merge parse and process
-    - inefficient
+* worker
+    - readWorker
+        - for multi spider jobs
+        - read/write redis
+    - writeWorker
+        - for multi db jobs
+        - read redis, write db
 
 * pools
     - child_process
     - ua
-    - spider
-    - taskList
+    - spiderPool
+    - writer // for a single db job
+
+* redis
+    - share data between child_process
+    - cache data for writing into mongodb
+    - Set for keys and Hash for detail data
 
 * error
+    - the key of a error job will be back to failureSet in redis.
+    - check failureSet key to find the htmlparse error.
+
+* tips
+    - useragent for pc/mobile
+        - while mobile is base on react + redux + ssr
+    - use only one type for htmlparse
+
+```javascript
+    // prepare your redis and mongodb
+    npm i
+    npm start
+```

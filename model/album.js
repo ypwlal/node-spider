@@ -3,13 +3,18 @@ const mongoose = require('mongoose');
 const { ObjectId } = mongoose.Schema.Types;
 
 const Album = new mongoose.Schema({
-    id: ObjectId,
+    id: Number,
+    name: String,
     company: String,
-    releaseTime: String,
+    publishTime: String,
     commentsCount: Number,
-    descr: String,
-    artistId: Number,
-    artistName: String
+    artists: [
+        {
+            id: Number,
+            name: String
+        }
+    ],
+    picUrl: String
 });
 
 module.exports = mongoose.model('Album', Album);

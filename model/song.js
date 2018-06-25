@@ -1,14 +1,22 @@
 const mongoose = require('mongoose');
 
-const { ObjectId } = mongoose.Schema.Types;
-
 const Song = new mongoose.Schema({
-    id: ObjectId,
+    id: Number,
+    name: String,
     commentsCount: Number,
-    artistId: Number,
-    artistName: String,
+    artists: [
+        {
+            id: Number,
+            name: String
+        }
+    ],
+    duration: {
+        type: Number,
+        default: 0
+    },
     albumId: Number,
-    albumName: String
+    publishTime: Number,
+    copyrightId: Number
 });
 
 module.exports = mongoose.model('Song', Song);

@@ -2,54 +2,58 @@ const request = require('request');
 const randomUserAgent = require('../utils/ua');
 
 class Spider {
-    constructor({ onRelease }) {
+    constructor({ id = 0, onRelease }) {
         this.url = null;
         this.vistor = null;
         this.onRelease = onRelease;
+        this.id = id;
     }
 
     init({
         url,
         data,
-        vistor = () => {}
+        vistor = () => {},
+        log = () => {},
+        ua
     }) {
         this.url = url;
         this.vistor = vistor;
         this.data = data;
+        this.ua = ua;
+        this.log = (str) => log(str + ` [spider-${this.id}]`);
     }
 
     release() {
         this.url = null;
         this.vistor = null;
         this.data = null;
+        this.ua = '';
+        this.log = () => {};
         this.onRelease && this.onRelease();
     }
 
     async start() {
-        try {
-            const html = await this.request(this.url);
-            await this.vistor(html);
-        } catch (err) {
-            console.log('spider start error: ' + err);
-        }
+        const html = await this.request(this.url, this.ua);
+        await this.vistor(html, this.log);
     }
 
-    request(url) {
+    request(url, ua) {
         return new Promise((resolve, reject) => {
-            console.log('request begin...');
+            this.log('request begin...');
             const time = +new Date();
             request({
                 url,
                 method: 'get',
                 headers: {
                     Referer: 'http://music.163.com',
-                    'User-Agent': randomUserAgent()
+                    'User-Agent': randomUserAgent(ua)
                 }
             }, (err, res, body) => {
-                if (err) {
+                if (err || !body) {
+                    this.log('request error over, cost ' + (Date.now() - time) + 'ms');
                     reject(err);
                 } else {
-                    console.log('request over, cost ' + (Date.now() - time) + 'ms');
+                    this.log('request over, cost ' + (Date.now() - time) + 'ms');
                     resolve(body);
                 }
             })

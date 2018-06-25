@@ -1,1 +1,3 @@
 node_modules
+info.*.log
+info*.log

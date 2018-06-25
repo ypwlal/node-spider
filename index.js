@@ -1,170 +1,122 @@
-const cheerio = require('cheerio');
+const { tasks, TASK_MAP, HOST_NAME } = require('./task');;
 const SpiderPool = require('./pools/spiderPool');
-const TaskPool = require('./pools/taskPool');
-const redisSvc = require('./service/redis');
+const delay = require('./utils/delay.js');
+const fork = require('child_process').fork;
+const cpus = require('os').cpus();
+const path = require('path');
 
-const HOST_NAME = 'https://music.163.com';
-
-function createTask(data) {
-    return ({
-        url,
-        vistor,
-        flag
-    });
-}
-
-const failTask = [];
-
-const tasks = [
-    {
-        name: 'start',
-        page: '/discover/artist',
-        vistor: async (html) => {
-            const time = +new Date();
-            const list = [];
-            console.log('parse begin.');
-            const $ = cheerio.load(html);
-            $('.blk .cat-flag').map(function(){
-                const url = $(this).attr('href');
-                const artist_tag = $(this).text();
-                list.push({
-                    taskType: 'artist',
-                    url: url + '&initial=0',
-                    data: {
-                        artist_tag
-                    }
-                });
-                for (let i = 65; i < 90; i += 1) {
-                    list.push({
-                        taskType: 'artist',
-                        url: url + `&initial=${i}`,
-                        data: {
-                            artist_tag
-                        }
-                    });
-                }
-            });
-            
-            for (const item of list) {
-                try {
-                    await redisSvc.sadd('taskSet', item.url);
-                    await redisSvc.hset('taskHash', item.url, item);
-                } catch (e) {
-                    console.log('redis error: ', e);
-                    failTask.push(item);
-                }
-            }
-            console.log('parse over, cost ' + (Date.now() - time) + 'ms');
-            return list;
-        }
-    },
-    {
-        name: 'artist',
-        page: (id, type) => `/discover/artist/cat?id=${id}&initial=${type}`,
-        vistor: (html) => {
-            return [id]
-        }
-    },
-    {
-        name: 'artist/album',
-        page: (id) => `artist/album?id=${id}&limit=9999`,
-        vistor: (html) => {
-            return [id]
-        }
-    },
-    {
-        name: 'album',
-        page: (id) => `/album?id=y${id}&limit=9999`,
-        ajax: (id) => `https://music.163.com/weapi/v1/resource/comments/R_SO_3_${id}?csrf_token=`,
-        vistor: (html) => {
-            return [id]
-        }
-    },
-    {
-        name: 'song',
-        page: (id) => `song?id=${id}`,
-        ajax: (id) => `https://music.163.com/weapi/v1/resource/comments/R_SO_4_${id}?csrf_token=`,
-        vistor: (html) => {
-            return {}
-        }
-    },
-    {
-        name: 'artistUser',
-        page: (id) => `/user/home?id=${id}`,
-        vistor: (html) => {
-
-        }
+process.on('exit', function() {
+    for (const pid in readWokers) {
+        readWokers[pid].kill();
     }
-];
-
-const taskMap = {
-    'artist': 1,
-    'artist/album': 2,
-    'album': 3,
-    'song': 4,
-    'artistUser': 5
-};
+});
 
 async function firstPhase() {
-    console.log(`第1阶段: ${tasks[0].name}开始`);
+    const task = tasks[TASK_MAP.start];
+    console.log(`第1阶段: ${task.name}开始`);
     const time = +new Date();
-    const task = tasks[0];
     const spider = SpiderPool.getSpider();
-    console.log(spider)
     spider.init({
         url: HOST_NAME + task.page,
-        vistor: task.vistor
+        vistor: task.vistor,
+        ua: task.ua
     });
-    await spider.start();
+    try {
+        await spider.start();
+    } catch (e) {
+        console.log('第一阶段错误', e)
+    }
+    
     spider.release();
     console.log(`第1阶段: ${task.name}结束, cost ` + (Date.now() - time) + 'ms');
 }
 
-async function runner(spider) {
-    let loop = true;
-    let key = null;
-    while (loop) {
-        const time = +new Date();
-        key = key || await redisSvc.spop('taskSet');
-        console.log(`task start ${key}`);
-        if (!key) {
-            return spider.release();
+const readWokers = {};
+const writeWokers = {};
+const startTime = +new Date();
+
+function createReadWorker() {
+    const readWoker = fork(path.join(__dirname, './workers/readWorker.js'));
+    readWoker.on('exit', function() {
+        console.log('ReadWorker ' + readWoker.pid + ' exited.');
+        delete readWokers[readWoker.pid];
+        console.log(Object.keys(readWokers).length + ' ReadWorkers left.');
+        if (!Object.keys(writeWokers).length && !Object.keys(readWokers).length) {
+            console.log('total time: ' + (Date.now() - startTime) + 'ms.');
+            process.exit(0);
         }
-        const task = await redisSvc.hget('taskHash', key);
-        const vistor = tasks[taskMap[task.taskType]];
-        if (vistor) {
-            spider.init({
-                url: HOST_NAME + task.url,
-                vistor
-            });
-            await spider.start();
+    });
+    readWokers[readWoker.pid] = readWoker;
+    console.log('Create ReadWorker. pid: ' + readWoker.pid);
+}
+
+function createWriteWorker() {
+    const worker = fork(path.join(__dirname, './workers/writeWorker.js'));
+    worker.on('exit', function() {
+        console.log('WriteWorker ' + worker.pid + ' exited.');
+        delete writeWokers[worker.pid];
+        console.log(Object.keys(writeWokers).length + ' WriteWorkers left.');
+        if (!Object.keys(writeWokers).length && !Object.keys(readWokers).length) {
+            console.log('total time: ' + (Date.now() - startTime) + 'ms.');
+            process.exit(0);
         }
-        console.log(`task end ${key}: cost ` + (Date.now() - time) + 'ms');
-        // key = await redisSvc.spop('taskSet');
-        loop = false; //!!key;
-    }
-    return spider.release();
+    });
+    writeWokers[worker.pid] = worker;
+    console.log('Create WriteWorker. pid: ' + worker.pid);
 }
 
 async function begin() {
-    await firstPhase();
-    console.log('begin');
-    const time = +new Date();
-    const list = [];
-    let hasUseSpider = true;
-    while (hasUseSpider) {
-        const spider = SpiderPool.getSpider();
-        if (spider) {
-            list.push(runner(spider));
-        } else {
-            hasUseSpider = false;
-        }
+    try {
+        await firstPhase();
+        await delay(5000);
+    } catch (err) {
+        console.log(err);
+        // process.exit(1);
     }
-    await Promise.all(list)
-    console.log(`over: cost ` + (Date.now() - time) + 'ms');
+    
+    const halfCpus = ~~(cpus.length / 2);
+    for (let i = 0; i < (cpus.length - 1) ; i += 1) {
+        createReadWorker();
+    }
+    await delay(5000);
+    for (let i = 0; i < 1; i += 1) {
+        createWriteWorker();
+    }
+}
+
+async function test() {
+    const task = tasks[TASK_MAP['album']];
+    console.log(`${task.name}开始`);
+    console.log(HOST_NAME + task.page(39707049))
+    const time = +new Date();
+    try {
+        const spider = SpiderPool.getSpider();
+        spider.init({
+            url: HOST_NAME + task.page(39707049),
+            vistor: task.vistor,
+            ua: task.ua
+        });
+        await spider.start();
+        spider.release();
+    } catch (e) {
+        console.log('error, failureSet: ', e);
+        // const _task = {
+        //     url: HOST_NAME + task.page(1187003),
+        //     taskType: 'song'
+        // }
+        // await putFalureTask(_task);
+    }
+    console.log(`${task.name}结束, cost ` + (Date.now() - time) + 'ms');
+    process.exit(1);
+}
+
+async function putFalureTask(task) {
+    await redisSvc.sadd('failureSet', task.url);
 }
 
 begin().catch(err => {
     console.log('begin error: ' + err);
     process.exit(1);
-})
+});
+// firstPhase()
+// test()
